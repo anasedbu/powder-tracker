@@ -203,6 +203,14 @@
   .stagepill{font-size:10px;font-weight:800;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.3px}
   .stagepill.active{background:rgba(232,161,58,.16);color:var(--warn)}
   .stagepill.done{background:var(--okbg);color:var(--live)}
+  .due{font-size:11px;font-weight:700;color:var(--accent2);background:rgba(91,143,214,.14);
+    padding:1px 7px;border-radius:6px;white-space:nowrap}
+  .due.over{color:var(--danger);background:rgba(229,87,78,.15)}
+  .reorder{display:flex;flex-direction:column;gap:4px;flex:0 0 auto}
+  .rbtn{width:34px;height:26px;border-radius:7px;border:1px solid var(--line);background:var(--card2);
+    color:var(--accent2);font-size:12px;font-weight:800;cursor:pointer;line-height:1;padding:0}
+  .rbtn:active{background:var(--accent);color:#fff}
+  .rbtn:disabled{opacity:.3;cursor:default;color:var(--mut2)}
 </style>
 </head>
 <body>
@@ -264,8 +272,22 @@
         <div class="hint" id="ralName"></div>
       </div>
       <div class="field">
+        <label class="fl">Finish <span style="font-weight:400;color:var(--mut2)">(optional)</span></label>
+        <input class="f" id="fFinish" list="finishList" placeholder="e.g. Matte, Sahara, Gloss, Textured" autocomplete="off">
+        <datalist id="finishList">
+          <option value="Matte"></option><option value="Gloss"></option><option value="Satin"></option>
+          <option value="Sahara"></option><option value="Textured"></option><option value="Fine Texture"></option>
+          <option value="Wrinkle"></option><option value="Metallic"></option><option value="Semi-Gloss"></option>
+        </datalist>
+      </div>
+      <div class="field">
         <label class="fl">Customer Name</label>
         <input class="f" id="fCust" placeholder="e.g. Al Sahlawi Aluminum" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="fl">Expected completion <span style="font-weight:400;color:var(--mut2)">(optional)</span></label>
+        <input class="f" id="fExpected" type="datetime-local">
+        <div class="hint">When the material should be ready. Shown to everyone on the card.</div>
       </div>
       <div class="field">
         <label class="fl">Description / Items <span style="font-weight:400;color:var(--mut2)">(optional)</span></label>
@@ -422,10 +444,11 @@ function swatchHtml(ral){
 }
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
+function orderKey(j){ return (j.order!=null)? j.order : tsMs(j.createdAt); }
 function renderActive(){
-  const list=jobs.filter(j=>j.status!=='done'); // already sorted earliest→latest
+  const list=jobs.filter(j=>j.status!=='done').sort((a,b)=>orderKey(a)-orderKey(b));
   $('activeEmpty').classList.toggle('hidden',list.length>0);
-  $('activeList').innerHTML=list.map((j,i)=>cardHtml(j,i+1,false)).join('');
+  $('activeList').innerHTML=list.map((j,i)=>cardHtml(j,i+1,false,i===0,i===list.length-1)).join('');
 }
 function renderDone(){
   let list=jobs.filter(j=>j.status==='done').sort((a,b)=>tsMs(b.doneAt)-tsMs(a.doneAt));
@@ -438,28 +461,56 @@ function renderDone(){
   $('doneList').innerHTML=list.map(j=>cardHtml(j,null,true)).join('');
 }
 function tsMs(ts){ if(!ts) return 0; return (ts.toDate?ts.toDate():new Date(ts)).getTime(); }
+function toLocalInput(ms){
+  if(ms==null) return '';
+  const d=new Date(ms), p=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes());
+}
 
-function cardHtml(j,order,done){
+function ralTitle(j){
+  let s=ralLabel(j.ral);
+  if(j.finish) s+=' · '+j.finish;
+  if(j.qty) s+=' · '+j.qty;
+  return s;
+}
+function expInfo(j){
+  if(j.expectedAt==null) return null;
+  const d=new Date(j.expectedAt);
+  const overdue=j.status!=='done' && j.expectedAt<Date.now();
+  const txt=d.toLocaleDateString([], {day:'2-digit',month:'short'})+' '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  return {txt,overdue};
+}
+function expPill(j){
+  const e=expInfo(j); if(!e) return '';
+  return `<span class="due${e.overdue?' over':''}">${e.overdue?'⚠ Overdue':'📅 Due'} ${e.txt}</span>`;
+}
+function cardHtml(j,order,done,isFirst,isLast){
   const thumb=(j.images&&j.images.length)?`<img class="cthumb" src="${j.images[0]}" alt="">`:'';
   const meta = done
     ? `<span>✅ ${fmtDate(j.doneAt)} ${fmtTime(j.doneAt)}</span><span class="timer done">took ${elapsed(j.createdAt,j.doneAt)}</span>`
-    : `<span>🕓 ${fmtTime(j.createdAt)}</span><span class="timer live-el" data-from="${tsMs(j.createdAt)}">${elapsed(j.createdAt,null)}</span>`;
+    : `<span>🕓 ${fmtTime(j.createdAt)}</span><span class="timer live-el" data-from="${tsMs(j.createdAt)}">${elapsed(j.createdAt,null)}</span>${expPill(j)}`;
+  const reorder=(isAdmin&&!done)?`<div class="reorder">
+      <button class="rbtn" ${isFirst?'disabled':''} onclick="event.stopPropagation();moveJob('${j.id}',-1)">▲</button>
+      <button class="rbtn" ${isLast?'disabled':''} onclick="event.stopPropagation();moveJob('${j.id}',1)">▼</button>
+    </div>`:'';
   return `<div class="card" id="card-${j.id}">
     <div class="chead" onclick="toggleCard('${j.id}')">
       ${!done&&order?`<span class="order">${order}</span>`:''}
       ${swatchHtml(j.ral)}
       <div class="cmain">
-        <div class="cral">${esc(ralLabel(j.ral))}${j.qty?' · '+esc(j.qty):''}</div>
+        <div class="cral">${esc(ralTitle(j))}</div>
         <div class="ccust">${esc(j.customer||'—')}</div>
         <div class="cmeta">${meta}</div>
       </div>
-      ${thumb}
+      ${reorder||thumb}
       <span class="chev">▶</span>
     </div>
     <div class="cbody">
       ${j.desc?`<div class="drow"><div class="dlab">Details</div><div class="dval">${esc(j.desc)}</div></div>`:''}
       <div class="drow"><div class="dlab">RAL Powder</div><div class="dval">${esc(ralLabel(j.ral))}${ralColor(j.ral)?` <span style="display:inline-block;width:13px;height:13px;border-radius:3px;vertical-align:-2px;border:1px solid rgba(255,255,255,.2);background:${ralColor(j.ral)}"></span>`:''}</div></div>
+      ${j.finish?`<div class="drow"><div class="dlab">Finish</div><div class="dval">${esc(j.finish)}</div></div>`:''}
       ${j.qty?`<div class="drow"><div class="dlab">Quantity</div><div class="dval">${esc(j.qty)}</div></div>`:''}
+      ${expInfo(j)?`<div class="drow"><div class="dlab">Expected</div><div class="dval"${expInfo(j).overdue?' style="color:var(--danger);font-weight:700"':''}>${expInfo(j).txt}${expInfo(j).overdue?' · overdue':''}</div></div>`:''}
       <div class="drow"><div class="dlab">Started</div><div class="dval">${fmtDate(j.createdAt)} at ${fmtTime(j.createdAt)}</div></div>
       ${done?`<div class="drow"><div class="dlab">Completed</div><div class="dval">${fmtDate(j.doneAt)} at ${fmtTime(j.doneAt)} · took ${elapsed(j.createdAt,j.doneAt)}</div></div>`
              :`<div class="drow"><div class="dlab">On floor</div><div class="dval"><span class="stagepill active">In Progress</span> · ${elapsed(j.createdAt,null)}</div></div>`}
@@ -467,6 +518,17 @@ function cardHtml(j,order,done){
       ${isAdmin?adminActions(j,done):''}
     </div>
   </div>`;
+}
+function moveJob(id,dir){
+  const list=jobs.filter(j=>j.status!=='done').sort((a,b)=>orderKey(a)-orderKey(b));
+  const i=list.findIndex(j=>j.id===id); if(i<0) return;
+  const swapWith=list[i+dir]; if(!swapWith) return;
+  const a=list[i], b=swapWith;
+  const oa=orderKey(a), ob=orderKey(b);
+  const batch=db.batch();
+  batch.update(db.collection('jobs').doc(a.id),{order:ob});
+  batch.update(db.collection('jobs').doc(b.id),{order:oa});
+  batch.commit().catch(e=>toast('Reorder failed: '+e.code,'err'));
 }
 function adminActions(j,done){
   return `<div class="actions">
@@ -531,10 +593,12 @@ function openForm(id){
     $('saveBtn').textContent='Save Changes';
     $('fRal').value=j.ral||''; $('fCust').value=j.customer||'';
     $('fDesc').value=j.desc||''; $('fQty').value=j.qty||'';
+    $('fFinish').value=j.finish||''; $('fExpected').value=toLocalInput(j.expectedAt);
     formImgs=(j.images||[]).slice();
   } else {
     $('formTitle').textContent='New Job'; $('saveBtn').textContent='Add to Floor';
     $('fRal').value=''; $('fCust').value=''; $('fDesc').value=''; $('fQty').value='';
+    $('fFinish').value=''; $('fExpected').value='';
   }
   updateRalPreview(); renderFormThumbs();
   showOverlay('formOverlay');
@@ -585,8 +649,11 @@ function saveJob(){
   const totalKb=formImgs.reduce((s,x)=>s+x.length,0)/1024;
   if(totalKb>900){ toast('Photos too large — remove one or two','err'); return; }
   $('saveBtn').disabled=true;
+  const expVal=$('fExpected').value;
   const data={
-    customer:cust, ral:ral, desc:$('fDesc').value.trim(), qty:$('fQty').value.trim(),
+    customer:cust, ral:ral, finish:$('fFinish').value.trim(),
+    desc:$('fDesc').value.trim(), qty:$('fQty').value.trim(),
+    expectedAt: expVal? new Date(expVal).getTime() : null,
     images:formImgs, status:'active'
   };
   const done=()=>{ $('saveBtn').disabled=false; closeForm(); };
@@ -596,6 +663,7 @@ function saveJob(){
       .catch(err=>{ $('saveBtn').disabled=false; toast('Save failed: '+err.code,'err'); });
   } else {
     data.createdAt=firebase.firestore.FieldValue.serverTimestamp();
+    data.order=Date.now(); // sortable position; newest goes to the end of the queue
     db.collection('jobs').add(data)
       .then(()=>{ done(); switchTab('active'); toast('Added to floor ✓','ok'); })
       .catch(err=>{ $('saveBtn').disabled=false; toast('Save failed: '+err.code,'err'); });
